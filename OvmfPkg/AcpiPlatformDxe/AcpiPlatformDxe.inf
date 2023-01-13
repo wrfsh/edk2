@@ -30,6 +30,7 @@
   QemuFwCfgAcpi.c
 
 [Packages]
+  EmbeddedPkg/EmbeddedPkg.dec
   MdeModulePkg/MdeModulePkg.dec
   MdePkg/MdePkg.dec
   OvmfPkg/OvmfPkg.dec
@@ -49,6 +50,7 @@
 [Protocols]
   gEfiAcpiTableProtocolGuid                     # PROTOCOL ALWAYS_CONSUMED
   gEfiPciIoProtocolGuid                         # PROTOCOL SOMETIMES_CONSUMED
+  gFdtClientProtocolGuid                        # PROTOCOL CONSUMED
   gQemuAcpiTableNotifyProtocolGuid              # PROTOCOL PRODUCES
 
 [Guids]
@@ -61,4 +63,4 @@
   gUefiOvmfPkgTokenSpaceGuid.PcdXenPvhStartOfDayStructPtrSize
 
 [Depex]
-  gEfiAcpiTableProtocolGuid
+  gEfiAcpiTableProtocolGuid AND gFdtClientProtocolGuid

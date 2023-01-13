@@ -9,6 +9,7 @@
 **/
 
 #include <IndustryStandard/Acpi.h>            // EFI_ACPI_DESCRIPTION_HEADER
+#include <IndustryStandard/Acpi51.h>          // EFI_ACPI_5_1_FIXED_ACPI_DESCRIPTION_TABLE
 #include <IndustryStandard/QemuLoader.h>      // QEMU_LOADER_FNAME_SIZE
 #include <Library/BaseLib.h>                  // AsciiStrCmp()
 #include <Library/BaseMemoryLib.h>            // CopyMem()
@@ -20,6 +21,7 @@
 #include <Library/UefiBootServicesTableLib.h> // gBS
 
 #include <Protocol/QemuAcpiTableNotify.h>
+#include <Protocol/FdtClient.h>
 #include "AcpiPlatform.h"
 EFI_HANDLE                       mQemuAcpiHandle = NULL;
 QEMU_ACPI_TABLE_NOTIFY_PROTOCOL  mAcpiNotifyProtocol;
@@ -815,6 +817,92 @@ UndoCmdWritePointer (
     ));
 }
 
+/**
+  Locate a PSCI node in DTB published by EL3 firmware that implemented it
+  and use information in it to patch ACPI FADT PSCI bits.
+
+  The reason for it is that EL3 PSCI implementation, which is not EDK2,
+  doesn't own ACPI tables and cannot advertise it there itself, it is using DTB instead.
+
+  Qemu also won't advertise PSCI if EL3 firmware is present.
+  A real example of that is running ARM trusted firmware in EL3 with PSCI enabled.
+
+  @param[in] PonterValue    FADT base address
+ 
+  @param[in] TableSize      Size of table in bytes
+
+  @return                   EFI_SUCCESS if FAST was patched or if patching was not needed,
+                            error status returned by FDT client protocol otherwise.
+**/
+STATIC
+EFI_STATUS
+EFIAPI
+PatchFadtPsciBits (
+  IN UINT64     PointerValue,
+  IN UINTN      TableSize
+  )
+{
+  EFI_STATUS                                    Status;
+  FDT_CLIENT_PROTOCOL                           *FdtClient;
+  CONST VOID                                    *Prop;
+  EFI_ACPI_5_1_FIXED_ACPI_DESCRIPTION_TABLE     *Fadt;
+  UINT8                                         MajorMinorRev;
+
+  Status = gBS->LocateProtocol (
+                  &gFdtClientProtocolGuid,
+                  NULL,
+                  (VOID **)&FdtClient
+                  );
+  if (Status == EFI_NOT_FOUND) {
+    goto NoPatchingNeeded;
+  } else if (EFI_ERROR(Status)) {
+    return Status;
+  }
+
+  Status = FdtClient->FindCompatibleNodeProperty (
+                        FdtClient,
+                        "arm,psci-0.2",
+                        "method",
+                        &Prop,
+                        NULL
+                        );
+  if (Status == EFI_NOT_FOUND) {
+    goto NoPatchingNeeded;
+  } else if (EFI_ERROR(Status)) {
+    return Status;
+  }
+
+  //
+  // Make sure FADT is large enough for 5.1
+  //
+  if (TableSize < sizeof (*Fadt)) {
+    goto NoPatchingNeeded;
+  }
+
+  Fadt = (EFI_ACPI_5_1_FIXED_ACPI_DESCRIPTION_TABLE *)(UINTN)PointerValue;
+
+  //
+  // Check that FADT revision is at least 5.1 now that it's safe to read fields
+  //
+  MajorMinorRev = (Fadt->Header.Revision << 4) | (Fadt->MinorVersion & 0x0F);
+  if (MajorMinorRev < 0x51) {
+    goto NoPatchingNeeded;
+  }
+
+  //
+  // Patch FADT PSCI bits
+  //
+  Fadt->ArmBootArch = EFI_ACPI_5_1_ARM_PSCI_COMPLIANT;
+  if (AsciiStrnCmp (Prop, "hvc", 3) == 0) {
+    Fadt->ArmBootArch |= EFI_ACPI_5_1_ARM_PSCI_USE_HVC;
+  }
+
+  return EFI_SUCCESS;
+
+NoPatchingNeeded:
+  return EFI_SUCCESS;
+}
+
 //
 // We'll be saving the keys of installed tables so that we can roll them back
 // in case of failure. 128 tables should be enough for anyone (TM).
@@ -901,6 +989,7 @@ Process2ndPassCmdAddPointer (
   UINT64                                              PointerValue;
   UINTN                                               Blob2Remaining;
   UINTN                                               TableSize;
+  UINT32                                              Signature;
   CONST EFI_ACPI_1_0_FIRMWARE_ACPI_CONTROL_STRUCTURE  *Facs;
   CONST EFI_ACPI_DESCRIPTION_HEADER                   *Header;
   EFI_STATUS                                          Status;
@@ -960,6 +1049,7 @@ Process2ndPassCmdAddPointer (
     ));
 
   TableSize = 0;
+  Signature = 0;
 
   //
   // To make our job simple, the FACS has a custom header. Sigh.
@@ -979,6 +1069,7 @@ Process2ndPassCmdAddPointer (
         Facs->Length
         ));
       TableSize = Facs->Length;
+      Signature = Facs->Signature;
     }
   }
 
@@ -1004,6 +1095,7 @@ Process2ndPassCmdAddPointer (
         Header->Length
         ));
       TableSize = Header->Length;
+      Signature = Header->Signature;
 
       //
       // Skip RSDT and XSDT because those are handled by
@@ -1033,6 +1125,22 @@ Process2ndPassCmdAddPointer (
       ));
     Status = EFI_OUT_OF_RESOURCES;
     goto RollbackSeenPointer;
+  }
+
+  //
+  // For FADT also patch PSCI flag if DTB exposes it.
+  //
+  if (Signature == EFI_ACPI_1_0_FIXED_ACPI_DESCRIPTION_TABLE_SIGNATURE) {
+    Status = PatchFadtPsciBits(PointerValue, TableSize);
+    if (EFI_ERROR (Status)) {
+      DEBUG ((
+        DEBUG_ERROR,
+        "%a: PatchFadtPsciBits(): %r\n",
+        __FUNCTION__,
+        Status
+        ));
+      goto RollbackSeenPointer;
+    }
   }
 
   Status = AcpiProtocol->InstallAcpiTable (
