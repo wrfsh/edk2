@@ -57,6 +57,8 @@
 #define ARM_HCR_AMO  BIT5
 #define ARM_HCR_TSC  BIT19
 #define ARM_HCR_TGE  BIT27
+#define ARM_HCR_APK  BIT40
+#define ARM_HCR_API  BIT41
 
 // Exception Syndrome Register
 #define AARCH64_ESR_EC(Ecr)   ((0x3F << 26) & (Ecr))

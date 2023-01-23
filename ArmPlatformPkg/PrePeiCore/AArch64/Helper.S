@@ -26,6 +26,11 @@ ASM_FUNC(SetupExceptionLevel2)
    orr     x0, x0, #(1 << 3)      // Enable EL2 FIQ
    orr     x0, x0, #(1 << 4)      // Enable EL2 IRQ
    orr     x0, x0, #(1 << 5)      // Enable EL2 SError and Abort
+
+   // Get out of the way of a poitential EL2 hypervisor by NOT trapping PAC registers and instructions
+   orr     x0, x0, #(1 << 40)     // HCR_EL2.APK
+   orr     x0, x0, #(1 << 41)     // HCR_EL2.API
+
    msr     hcr_el2, x0            // Write back our settings
 
    msr     cptr_el2, xzr          // Disable copro traps to EL2

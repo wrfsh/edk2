@@ -22,6 +22,7 @@ ArchInitialize (
 
   if (ArmReadCurrentEL () == AARCH64_EL2) {
     // Trap General Exceptions. All exceptions that would be routed to EL1 are routed to EL2
-    ArmWriteHcr (ARM_HCR_TGE);
+    // Also get out of the way of a potential EL2 hypervisor and do NOT trap PAC registers or instructions.
+    ArmWriteHcr (ARM_HCR_TGE | ARM_HCR_APK | ARM_HCR_API);
   }
 }
